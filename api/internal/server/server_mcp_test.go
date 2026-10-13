@@ -59,6 +59,7 @@ var expectedMCPTools = []string{
 	"revoke_folder_grant",
 	"revoke_service_account_key",
 	"search_folders",
+	"set_document_labels",
 	"share_document",
 	"share_folder",
 	"unreact_comment",

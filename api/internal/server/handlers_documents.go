@@ -16,9 +16,12 @@ import (
 
 // createDocumentResponse is the payload of POST /v1/documents.
 type createDocumentResponse struct {
-	ID               string        `json:"id"`
-	CurrentVersionID string        `json:"current_version_id"`
-	DefaultGrant     *defaultGrant `json:"default_grant,omitempty"`
+	ID                string             `json:"id"`
+	CurrentVersionID  string             `json:"current_version_id"`
+	FolderID          string             `json:"folder_id,omitempty"`
+	Labels            []string           `json:"labels,omitempty"`
+	PermissionWarning *permissionWarning `json:"permission_warning,omitempty"`
+	DefaultGrant      *defaultGrant      `json:"default_grant,omitempty"`
 }
 
 // defaultGrant reports the server-applied default "anyone" grant so clients
@@ -42,21 +45,38 @@ type defaultGrantPrincipal struct {
 // @Produce json
 // @Param title formData string true "Document title"
 // @Param file formData file true "Single-file HTML"
+// @Param folder_id formData string false "Destination folder ID"
+// @Param labels formData string false "Comma-separated document labels"
 // @Param default_permission formData string false "Default sharing applied at create: viewer, commenter, editor or private. Overrides the server-wide default."
 // @Success 201 {object} createDocumentResponse
 // @Router /v1/documents [post]
 func (h handlers) createDocument(c *gin.Context) {
 	p := current(c)
-	html, err := readMultipartFile(c, "file")
-	if errors.Is(err, errPayloadTooLarge) {
-		c.JSON(http.StatusRequestEntityTooLarge, errorResponse("payload_too_large", "HTML file exceeds 50 MiB", nil))
-		return
+	folderID := strings.TrimSpace(c.PostForm("folder_id"))
+	if folderID != "" {
+		if !h.needFolderRole(c, folderID, repo.RoleEditor) {
+			return
+		}
 	}
-	if err != nil {
+	rawLabels := parseFormLabels(c)
+	var labels []string
+	if len(rawLabels) > 0 {
+		if !h.deps.labelsEnabled {
+			featureDisabled(c, "Document labels are temporarily disabled")
+			return
+		}
+		var err error
+		labels, err = validateAndNormalizeLabels(rawLabels)
+		if err != nil {
+			badRequest(c, err.Error())
+			return
+		}
+	}
+	title := c.PostForm("title")
+	if title == "" {
 		badRequest(c, "invalid document upload")
 		return
 	}
-	title := c.PostForm("title")
 	// The request override beats the server-wide default regardless of
 	// deployment mode: only the server env is org-gated (at startup), because
 	// a caller who sets the field makes an explicit per-document choice.
@@ -69,7 +89,12 @@ func (h handlers) createDocument(c *gin.Context) {
 		}
 		permission = role
 	}
-	if title == "" {
+	html, err := readMultipartFile(c, "file")
+	if errors.Is(err, errPayloadTooLarge) {
+		c.JSON(http.StatusRequestEntityTooLarge, errorResponse("payload_too_large", "HTML file exceeds 50 MiB", nil))
+		return
+	}
+	if err != nil {
 		badRequest(c, "invalid document upload")
 		return
 	}
@@ -85,6 +110,29 @@ func (h handlers) createDocument(c *gin.Context) {
 	}
 	incDocument("created", actorType(c))
 	incVersion("created_initial", actorType(c))
+
+	var warning *permissionWarning
+	if folderID != "" {
+		hasGrants, err := h.deps.repository.MoveDocumentToFolder(c.Request.Context(), *p, folderID, d.ID)
+		if err != nil {
+			internalErr(c, fmt.Errorf("move created document %s to folder %s: %w", d.ID, folderID, err))
+			return
+		}
+		if hasGrants {
+			warning = mayBroadenAccessWarning("This folder has active grants — everyone with access may see this document.")
+		}
+	}
+
+	var appliedLabels []string
+	if len(labels) > 0 {
+		var err error
+		appliedLabels, err = h.deps.repository.ReplaceDocumentLabels(c.Request.Context(), d.ID, labels, *p)
+		if err != nil {
+			internalErr(c, fmt.Errorf("set labels for created document %s: %w", d.ID, err))
+			return
+		}
+	}
+
 	var granted *defaultGrant
 	if permission != repo.RoleNone {
 		g, err := h.deps.repository.CreateGrant(c.Request.Context(), "document", d.ID, auth.Principal{Type: auth.PrincipalAnyone}, permission, *p)
@@ -100,7 +148,14 @@ func (h handlers) createDocument(c *gin.Context) {
 		incGrant("created", string(g.Role), string(g.Principal.Type), actorType(c))
 		granted = &defaultGrant{GrantID: g.ID, Principal: defaultGrantPrincipal{Type: auth.PrincipalAnyone}, Role: g.Role}
 	}
-	c.JSON(http.StatusCreated, createDocumentResponse{ID: d.ID, CurrentVersionID: d.CurrentVersionID, DefaultGrant: granted})
+	c.JSON(http.StatusCreated, createDocumentResponse{
+		ID:                d.ID,
+		CurrentVersionID:  d.CurrentVersionID,
+		FolderID:          folderID,
+		Labels:            appliedLabels,
+		PermissionWarning: warning,
+		DefaultGrant:      granted,
+	})
 }
 
 // ListDocuments godoc

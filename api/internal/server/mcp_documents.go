@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -68,6 +69,8 @@ func registerMCPDocumentCRUDTools(server *mcpserver.MCPServer, api mcpAPIAdapter
 		mcp.WithDescription("Create a slashdocs document from complete self-contained HTML. Returns its document and initial version IDs. The server applies its configured default sharing at create; when a default grant was applied, the result carries default_grant (grant_id, principal, role) plus a warning describing who can access the document and how to revoke the grant."),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Human-readable document title.")),
 		mcp.WithString("html", mcp.Required(), mcp.Description("Complete self-contained HTML, up to 50 MiB.")),
+		mcp.WithString("folder_id", mcp.Description("Optional destination folder ID (fld_…) to place the document in.")),
+		mcp.WithArray("labels", mcp.Description("Optional initial labels to attach to the document."), mcp.WithStringItems()),
 	)...), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		title, invalid := mcpRequired(request, "title")
 		if invalid != nil {
@@ -77,7 +80,14 @@ func registerMCPDocumentCRUDTools(server *mcpserver.MCPServer, api mcpAPIAdapter
 		if invalid != nil {
 			return invalid, nil
 		}
-		response, err := api.multipartResponse(ctx, "/v1/documents", map[string]string{"title": title}, html, nil, api.handlers.createDocument)
+		fields := map[string]string{"title": title}
+		if folderID := request.GetString("folder_id", ""); folderID != "" {
+			fields["folder_id"] = folderID
+		}
+		if labels := request.GetStringSlice("labels", nil); len(labels) > 0 {
+			fields["labels"] = strings.Join(labels, ",")
+		}
+		response, err := api.multipartResponse(ctx, "/v1/documents", fields, html, nil, api.handlers.createDocument)
 		if err != nil || response.status != http.StatusCreated {
 			return api.result(response, err, false)
 		}
@@ -109,6 +119,22 @@ func registerMCPDocumentCRUDTools(server *mcpserver.MCPServer, api mcpAPIAdapter
 			return invalid, nil
 		}
 		return api.delete(ctx, "/v1/documents/"+id, mcpParams("id", id), api.handlers.deleteDocument)
+	})
+
+	server.AddTool(mcp.NewTool("set_document_labels", mutationOptions(true, true,
+		mcp.WithDescription("Replace a document's labels."),
+		mcpDocumentID(),
+		mcp.WithArray("labels", mcp.Required(), mcp.Description("Replacement list of labels for the document."), mcp.WithStringItems()),
+	)...), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id, invalid := mcpRequired(request, "document_id")
+		if invalid != nil {
+			return invalid, nil
+		}
+		labels, err := request.RequireStringSlice("labels")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return api.json(ctx, http.MethodPut, "/v1/documents/"+id+"/labels", map[string]any{"labels": labels}, mcpParams("id", id), api.handlers.replaceDocumentLabels)
 	})
 
 }
