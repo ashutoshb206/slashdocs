@@ -253,6 +253,16 @@ func defaultGrantInfo(payload map[string]any) (role, grantID string) {
 	return role, grantID
 }
 
+func permissionWarningText(payload map[string]any) string {
+	if w, ok := payload["permission_warning"].(map[string]any); ok {
+		msg := fmt.Sprint(value(w, "message"))
+		if msg != "" && msg != "<nil>" {
+			return msg
+		}
+	}
+	return ""
+}
+
 // renderCreatedDocument reports a document create from the server response
 // alone: the server owns default sharing, so a default_grant in the payload
 // is the only signal that the document was shared. requestedPermission is the
@@ -278,16 +288,12 @@ func renderCreatedDocument(out io.Writer, g *globals, cl *Client, title, request
 	if g.json {
 		return renderCreatedDocumentJSON(out, g, id, requestedPermission, documentURL, role, grantID, payload)
 	}
-	if err := confirm(out, g, fmt.Sprintf("Created document %q (%s). Review it at %s", title, id, documentURL)); err != nil {
-		return err
+	confirmMsg := fmt.Sprintf("Created document %q (%s). Review it at %s", title, id, documentURL)
+	if w := permissionWarningText(payload); w != "" {
+		confirmMsg += " Warning: " + w
 	}
-	if w, ok := payload["permission_warning"].(map[string]any); ok {
-		msg := fmt.Sprint(value(w, "message"))
-		if msg != "" && msg != "<nil>" {
-			if err := confirm(out, g, "Warning: "+msg); err != nil {
-				return err
-			}
-		}
+	if err := confirm(out, g, confirmMsg); err != nil {
+		return err
 	}
 	if grantID != "" {
 		// The confirm line must not claim "org-wide" on a public deployment,

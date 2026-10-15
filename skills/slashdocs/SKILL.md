@@ -48,7 +48,8 @@ format:
 3. Save it locally (for example `report.html`).
 4. Use `slashdocs docs --help` and `slashdocs docs create --help` to confirm current
    syntax.
-5. Publish with the CLI (`slashdocs docs create report.html --title 'Report' --folder-id <fld_…> --labels api,review-ready`) or via MCP `create_document`.
+5. Publish with the CLI (`slashdocs docs create report.html --title 'Report'`) or via MCP `create_document`.
+   Pass `--folder-id <fld_…>` when publishing into a specific folder, and `--labels api,review-ready` to tag the document at creation.
 6. Return the printed slashdocs document URL.
 
 ### Updating an existing document

@@ -36,6 +36,36 @@ type defaultGrantPrincipal struct {
 	Type auth.PrincipalType `json:"type"`
 }
 
+func (h handlers) parseAndValidateDocumentLabels(c *gin.Context) ([]string, bool) {
+	rawLabels := parseFormLabels(c)
+	if len(rawLabels) == 0 {
+		return nil, true
+	}
+	if !h.deps.labelsEnabled {
+		featureDisabled(c, "Document labels are temporarily disabled")
+		return nil, false
+	}
+	labels, err := validateAndNormalizeLabels(rawLabels)
+	if err != nil {
+		badRequest(c, err.Error())
+		return nil, false
+	}
+	return labels, true
+}
+
+func (h handlers) parseRequestedDefaultPermission(c *gin.Context) (repo.Role, bool) {
+	permission := h.deps.defaultDocPermission
+	if raw, ok := c.GetPostForm("default_permission"); ok {
+		role, valid := ParseDefaultDocPermission(raw)
+		if !valid {
+			badRequest(c, "default_permission must be viewer, commenter, editor or private")
+			return repo.RoleNone, false
+		}
+		permission = role
+	}
+	return permission, true
+}
+
 // CreateDocument godoc
 // @Summary Create document
 // @Tags documents
@@ -52,43 +82,6 @@ type defaultGrantPrincipal struct {
 // @Router /v1/documents [post]
 func (h handlers) createDocument(c *gin.Context) {
 	p := current(c)
-	folderID := strings.TrimSpace(c.PostForm("folder_id"))
-	if folderID != "" {
-		if !h.needFolderRole(c, folderID, repo.RoleEditor) {
-			return
-		}
-	}
-	rawLabels := parseFormLabels(c)
-	var labels []string
-	if len(rawLabels) > 0 {
-		if !h.deps.labelsEnabled {
-			featureDisabled(c, "Document labels are temporarily disabled")
-			return
-		}
-		var err error
-		labels, err = validateAndNormalizeLabels(rawLabels)
-		if err != nil {
-			badRequest(c, err.Error())
-			return
-		}
-	}
-	title := c.PostForm("title")
-	if title == "" {
-		badRequest(c, "invalid document upload")
-		return
-	}
-	// The request override beats the server-wide default regardless of
-	// deployment mode: only the server env is org-gated (at startup), because
-	// a caller who sets the field makes an explicit per-document choice.
-	permission := h.deps.defaultDocPermission
-	if raw, ok := c.GetPostForm("default_permission"); ok {
-		role, valid := ParseDefaultDocPermission(raw)
-		if !valid {
-			badRequest(c, "default_permission must be viewer, commenter, editor or private")
-			return
-		}
-		permission = role
-	}
 	html, err := readMultipartFile(c, "file")
 	if errors.Is(err, errPayloadTooLarge) {
 		c.JSON(http.StatusRequestEntityTooLarge, errorResponse("payload_too_large", "HTML file exceeds 50 MiB", nil))
@@ -98,11 +91,37 @@ func (h handlers) createDocument(c *gin.Context) {
 		badRequest(c, "invalid document upload")
 		return
 	}
+	title := c.PostForm("title")
+	if title == "" {
+		badRequest(c, "invalid document upload")
+		return
+	}
+	folderID := strings.TrimSpace(c.PostForm("folder_id"))
+	if folderID != "" {
+		if !h.needFolderRole(c, folderID, repo.RoleEditor) {
+			return
+		}
+	}
+	labels, ok := h.parseAndValidateDocumentLabels(c)
+	if !ok {
+		return
+	}
+	permission, ok := h.parseRequestedDefaultPermission(c)
+	if !ok {
+		return
+	}
 	observeHTML("document_create", len(html))
-	d, _, err := h.deps.repository.CreateDocument(c.Request.Context(), *p, title, html)
+	d, _, err := h.deps.repository.CreateDocument(c.Request.Context(), *p, title, html, repo.CreateDocumentOptions{
+		FolderID: folderID,
+		Labels:   labels,
+	})
 	if err != nil {
 		if errors.Is(err, blob.ErrStorage) {
 			c.JSON(http.StatusBadGateway, errorResponse("blob_storage_failed", "could not upload HTML to blob storage", nil))
+			return
+		}
+		if errors.Is(err, repo.ErrNotFound) {
+			c.JSON(http.StatusForbidden, errorResponse("forbidden", "folder not found or access denied", nil))
 			return
 		}
 		internalErr(c, err)
@@ -112,25 +131,8 @@ func (h handlers) createDocument(c *gin.Context) {
 	incVersion("created_initial", actorType(c))
 
 	var warning *permissionWarning
-	if folderID != "" {
-		hasGrants, err := h.deps.repository.MoveDocumentToFolder(c.Request.Context(), *p, folderID, d.ID)
-		if err != nil {
-			internalErr(c, fmt.Errorf("move created document %s to folder %s: %w", d.ID, folderID, err))
-			return
-		}
-		if hasGrants {
-			warning = mayBroadenAccessWarning("This folder has active grants — everyone with access may see this document.")
-		}
-	}
-
-	var appliedLabels []string
-	if len(labels) > 0 {
-		var err error
-		appliedLabels, err = h.deps.repository.ReplaceDocumentLabels(c.Request.Context(), d.ID, labels, *p)
-		if err != nil {
-			internalErr(c, fmt.Errorf("set labels for created document %s: %w", d.ID, err))
-			return
-		}
+	if folderID != "" && d.FolderHasGrants {
+		warning = mayBroadenAccessWarning("This folder has active grants — everyone with access may see this document.")
 	}
 
 	var granted *defaultGrant
@@ -152,7 +154,7 @@ func (h handlers) createDocument(c *gin.Context) {
 		ID:                d.ID,
 		CurrentVersionID:  d.CurrentVersionID,
 		FolderID:          folderID,
-		Labels:            appliedLabels,
+		Labels:            d.Labels,
 		PermissionWarning: warning,
 		DefaultGrant:      granted,
 	})

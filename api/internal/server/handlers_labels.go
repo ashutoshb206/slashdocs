@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -40,26 +39,8 @@ func validateAndNormalizeLabels(rawLabels []string) ([]string, error) {
 }
 
 func parseFormLabels(c *gin.Context) []string {
-	var rawItems []string
-	if arr := c.PostFormArray("labels"); len(arr) > 0 {
-		rawItems = arr
-	} else if arr := c.PostFormArray("labels[]"); len(arr) > 0 {
-		rawItems = arr
-	} else if raw := c.PostForm("labels"); raw != "" {
-		trimmed := strings.TrimSpace(raw)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			var parsed []string
-			if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
-				rawItems = parsed
-			} else {
-				rawItems = []string{raw}
-			}
-		} else {
-			rawItems = []string{raw}
-		}
-	}
 	var result []string
-	for _, item := range rawItems {
+	for _, item := range c.PostFormArray("labels") {
 		for _, part := range strings.Split(item, ",") {
 			trimmed := strings.TrimSpace(part)
 			if trimmed != "" {

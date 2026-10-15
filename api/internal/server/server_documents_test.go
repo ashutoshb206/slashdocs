@@ -129,6 +129,8 @@ func TestCreateDocumentInFolder(t *testing.T) {
 			"X-Test-Principal": stranger,
 		})
 		assertStatus(t, rr, http.StatusForbidden)
+		assertNoDocumentWithTitle(t, e, stranger, "Unauthorized Spec")
+		assertNoDocumentWithTitle(t, e, owner, "Unauthorized Spec")
 	})
 
 	t.Run("refuses create when folder does not exist", func(t *testing.T) {
@@ -142,6 +144,7 @@ func TestCreateDocumentInFolder(t *testing.T) {
 			"X-Test-Principal": owner,
 		})
 		assertStatus(t, rr, http.StatusForbidden)
+		assertNoDocumentWithTitle(t, e, owner, "Missing Folder Spec")
 	})
 
 	t.Run("returns permission warning when destination folder has active grants", func(t *testing.T) {
@@ -174,6 +177,27 @@ func TestCreateDocumentInFolder(t *testing.T) {
 			t.Fatalf("expected permission warning, got: %s", rr.Body.String())
 		}
 	})
+}
+
+func assertNoDocumentWithTitle(t *testing.T, e *testEnv, principal, title string) {
+	t.Helper()
+	list := do(t, e.h, http.MethodGet, "/v1/documents", "", map[string]string{
+		"X-Test-Principal": principal,
+	})
+	assertStatus(t, list, http.StatusOK)
+	var resp struct {
+		Items []struct {
+			Title string `json:"title"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list documents: %v", err)
+	}
+	for _, doc := range resp.Items {
+		if doc.Title == title {
+			t.Fatalf("expected no document with title %q, but found one", title)
+		}
+	}
 }
 
 func TestCreateDocumentWithLabels(t *testing.T) {
@@ -229,6 +253,7 @@ func TestCreateDocumentWithLabels(t *testing.T) {
 			"X-Test-Principal": owner,
 		})
 		assertStatus(t, rr, http.StatusBadRequest)
+		assertNoDocumentWithTitle(t, e, owner, "Invalid Label Doc")
 	})
 }
 

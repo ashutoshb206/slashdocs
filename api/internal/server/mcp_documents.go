@@ -66,7 +66,7 @@ func registerMCPDocumentCRUDTools(server *mcpserver.MCPServer, api mcpAPIAdapter
 	})
 
 	server.AddTool(mcp.NewTool("create_document", mutationOptions(false, false,
-		mcp.WithDescription("Create a slashdocs document from complete self-contained HTML. Returns its document and initial version IDs. The server applies its configured default sharing at create; when a default grant was applied, the result carries default_grant (grant_id, principal, role) plus a warning describing who can access the document and how to revoke the grant."),
+		mcp.WithDescription("Create a slashdocs document from complete self-contained HTML. Returns its document and initial version IDs. Optional folder_id places the document in that folder and requires editor on it (403 otherwise). Optional labels attach to the document (up to 20 labels using [a-z0-9][a-z0-9._-]{0,47}). The server applies its configured default sharing at create; when a default grant was applied, the result carries default_grant (grant_id, principal, role) plus a warning describing who can access the document and how to revoke the grant. When folder_id is provided and the target folder has active grants, the result carries permission_warning describing who can access the document."),
 		mcp.WithString("title", mcp.Required(), mcp.Description("Human-readable document title.")),
 		mcp.WithString("html", mcp.Required(), mcp.Description("Complete self-contained HTML, up to 50 MiB.")),
 		mcp.WithString("folder_id", mcp.Description("Optional destination folder ID (fld_…) to place the document in.")),
@@ -122,7 +122,7 @@ func registerMCPDocumentCRUDTools(server *mcpserver.MCPServer, api mcpAPIAdapter
 	})
 
 	server.AddTool(mcp.NewTool("set_document_labels", mutationOptions(true, true,
-		mcp.WithDescription("Replace a document's labels."),
+		mcp.WithDescription("Replace a document's labels. Replaces the full set of labels (an empty array clears them). Each label must match [a-z0-9][a-z0-9._-]{0,47}, with a maximum of 20 labels. Requires editor role on the document."),
 		mcpDocumentID(),
 		mcp.WithArray("labels", mcp.Required(), mcp.Description("Replacement list of labels for the document."), mcp.WithStringItems()),
 	)...), func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

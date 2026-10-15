@@ -153,6 +153,7 @@ func TestMCPStreamableHTTPInitializeListAndCall(t *testing.T) {
 		"revoke_document_grant":            true,
 		"revoke_folder_grant":              true,
 		"revoke_service_account_key":       true,
+		"set_document_labels":              true,
 		"update_comment":                   true,
 		"update_document_grant":            true,
 		"update_folder_grant":              true,
