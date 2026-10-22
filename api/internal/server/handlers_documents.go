@@ -53,6 +53,9 @@ func (h handlers) parseAndValidateDocumentLabels(c *gin.Context) ([]string, bool
 	return labels, true
 }
 
+// The request override beats the server-wide default regardless of
+// deployment mode: only the server env is org-gated (at startup), because
+// a caller who sets the field makes an explicit per-document choice.
 func (h handlers) parseRequestedDefaultPermission(c *gin.Context) (repo.Role, bool) {
 	permission := h.deps.defaultDocPermission
 	if raw, ok := c.GetPostForm("default_permission"); ok {
